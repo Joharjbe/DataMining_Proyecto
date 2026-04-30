@@ -1,0 +1,27 @@
+# dataset pesado
+dataset/
+
+# entorno virtual
+proyecto_dm/
+
+# basura de sistema
+.DS_Store
+__pycache__/
+
+# ========================
+
+# LOGS
+
+# ========================
+
+*.log
+
+# ========================
+
+# DOCKER
+
+# ========================
+
+*.pid
+
+*.tmp
