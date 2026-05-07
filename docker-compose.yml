@@ -8,7 +8,8 @@ services:
     ports:
       - "8080:8080"
       - "7077:7077"
-      - "4040:4040-4040"
+    volumes:
+      - "/Users/nahiaescalante/Documents/UTEC/2026-1/Data_Mining/Proyecto/DataMining_Proyecto:/Users/nahiaescalante/Documents/UTEC/2026-1/Data_Mining/Proyecto/DataMining_Proyecto"
     networks:
       - spark-network
 
@@ -19,8 +20,15 @@ services:
       /opt/spark/bin/spark-class
       org.apache.spark.deploy.worker.Worker
       spark://spark-master:7077
+    environment:
+      - SPARK_WORKER_MEMORY=3G
+      - SPARK_WORKER_CORES=2
+    ports:
+      - "8081:8081"
     depends_on:
       - spark-master
+    volumes:
+      - "/Users/nahiaescalante/Documents/UTEC/2026-1/Data_Mining/Proyecto/DataMining_Proyecto:/Users/nahiaescalante/Documents/UTEC/2026-1/Data_Mining/Proyecto/DataMining_Proyecto"
     networks:
       - spark-network
 
@@ -31,8 +39,15 @@ services:
       /opt/spark/bin/spark-class
       org.apache.spark.deploy.worker.Worker
       spark://spark-master:7077
+    environment:
+      - SPARK_WORKER_MEMORY=3G
+      - SPARK_WORKER_CORES=2
+    ports:
+      - "8082:8081"
     depends_on:
       - spark-master
+    volumes:
+      - "/Users/nahiaescalante/Documents/UTEC/2026-1/Data_Mining/Proyecto/DataMining_Proyecto:/Users/nahiaescalante/Documents/UTEC/2026-1/Data_Mining/Proyecto/DataMining_Proyecto"
     networks:
       - spark-network
 
