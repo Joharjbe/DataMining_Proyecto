@@ -191,13 +191,13 @@ La rúbrica acepta explícitamente *"Apriori en local sobre muestra justificada"
 
 **Pipeline:**
 1. Carga directa de `ratings_clean.parquet` y `movies_clean.parquet` con `pyarrow`.
-2. Universo: películas con ≥ 5,000 likes (~590 películas mainstream) — filtro justificado por error estándar de la confianza.
+2. Universo: películas con ≥ 5,000 likes (587 películas mainstream) — filtro justificado por error estándar de la confianza.
 3. Muestra del 50 % de usuarios (≈68.5K transacciones) con `seed = 42`. Justificación cuantitativa por **desigualdad de Hoeffding**: para reglas con soporte global ≥ 0.06, la probabilidad de no detectarlas en la muestra es `~10⁻⁶`; para ≥ 0.07, despreciable. **Validación empírica**: comparado con Apriori sobre 100% (137K usuarios), el 50% obtuvo 3,418 vs 3,415 reglas — diferencia despreciable que confirma Hoeffding.
 4. **Apriori** en dos pasadas (1-itemsets y 2-itemsets) con poda anti-monotónica.
 5. Reglas `A → B` con métricas soporte / confianza / lift; filtros `MIN_SUPPORT = 0.05`, `MIN_CONFIDENCE = 0.5`, `lift > 1`.
 6. Visualización: top 15 reglas por lift + scatter `support × confidence × lift`.
 
-**Resultado Apriori:** 3,418 reglas con `lift > 1` (la rúbrica exige ≥ 10) en ~30 segundos.
+**Resultado Apriori:** 3,418 reglas con `lift > 1` (la rúbrica exige ≥ 10) en 22.9 s.
 
 **Complemento — FP-Growth distribuido con Spark MLlib:**
 
@@ -207,7 +207,7 @@ Para cubrir el camino A de la rúbrica y descubrir itemsets de tamaño ≥ 3 ina
 - Muestra: 10 % de usuarios (~13K transacciones)
 - `MIN_SUPPORT = 0.10`, driver Spark = 5g, stack JVM = 100m
 
-**Resultado FP-Growth:** 1,562 itemsets frecuentes (incluyendo **695 de tamaño ≥ 3, hasta tamaño 5**), 2,674 reglas — descubre patrones tipo `{LOTR1, LOTR2} → LOTR3` con confianza ≈ 0.90 que Apriori puro no encuentra.
+**Resultado FP-Growth:** 1,550 itemsets frecuentes (incluyendo **690 de tamaño ≥ 3, hasta tamaño 5**), 2,674 reglas — descubre patrones tipo `{LOTR1, LOTR2} → LOTR3` con confianza ≈ 0.90 que Apriori puro no encuentra.
 
 **Los dos algoritmos son complementarios**, no competitivos: Apriori puro examina el rango binario sobre universo amplio; FP-Growth descubre patrones saga-completa sobre universo restringido. La comparación detallada está en secciones 3.6 (config máxima viable de cada uno) y 3.7 (apples-to-apples con parámetros idénticos) del reporte.
 
@@ -244,39 +244,44 @@ Para cubrir el camino A de la rúbrica y descubrir itemsets de tamaño ≥ 3 ina
 
 ### RDD vs DataFrame (Fase 2)
 
-DataFrame es **consistentemente más rápido** que RDD gracias al optimizador **Catalyst** y a Tungsten. La aceleración varía según la complejidad de la operación:
+DataFrame es **consistentemente más rápido** que RDD gracias al optimizador **Catalyst** y a Tungsten. Cada operación se ejecutó 5 veces (1 cold + 4 warm con caché) para reportar speedup con desviación estándar:
 
-| Operación | Speedup DataFrame |
-|---|---|
-| Conteo por película | ~119× |
-| Top-20 con join | ~10× |
-| Conteo por usuario | ~14× |
+| Operación | Speedup cold | Speedup warm |
+|---|---|---|
+| Conteo por película | 20.4× | 38.5× ± 15.9× |
+| Top-20 con join | 26.5× | 62.7× ± 7.7× |
+| Conteo por usuario | 44.5× | 101.9× ± 17.4× |
 
-> El 119× del primer caso está inflado por caché en memoria; los otros (10×–14×) son representativos de un escenario realista.
+> Incluso en frío DataFrame es 20–45× más rápido (la ventaja no depende del caché). En caliente el caché amplifica la diferencia (38–102×): plan Catalyst reusado, datos en formato columnar Tungsten en memoria, sin re-deserializar.
 
 ### MinHash vs Jaccard exacto (Fase 3)
 
-Sobre 19,900 pares evaluados:
+Sobre 19,900 pares evaluados con `t = 100` funciones hash:
 
 | Métrica | Valor |
 |---|---|
-| Error promedio (MAE) | 0.0104 |
-| Error mediano | 0.0066 |
-| Error máximo | 0.1470 |
-| Correlación de Pearson | **0.8894** (p < 1e-300) |
+| Error promedio (MAE) | 0.0072 |
+| Correlación de Pearson | **0.8223** (p < 1e-300) |
+
+**Sensibilidad al número de hashes (`t`):** el MAE cae monotónicamente de 0.0187 (`t=10`) a 0.0037 (`t=400`), siguiendo la cota teórica `O(1/√t)`. La correlación de Pearson sube de 0.36 (`t=10`) a 0.94 (`t=400`), pasando por 0.82 (`t=100`) y 0.89 (`t=200`). `t=100` es el punto razonable de equilibrio entre precisión y costo.
 
 ### Curva precisión-recall LSH (Fase 3)
 
-Con 100 firmas y 404 pares verdaderamente similares (Jaccard ≥ 0.20):
+Con 100 firmas y 75 pares verdaderamente similares (Jaccard ≥ 0.5):
 
 | b | r | Candidatos | TP | FP | FN | Precisión | Recall |
 |---|---|---|---|---|---|---|---|
-| 100 | 1  | 13,090 | 404 | 12,686 | 0   | 0.031 | 1.000 |
-| 50  | 2  | 1,101  | 268 | 833    | 136 | 0.243 | 0.663 |
-| **25** | **4** | **20** | **17** | **3** | **387** | **0.850** | 0.042 |
-| 20  | 5  | 1      | 0   | 1      | 404 | 0.000 | 0.000 |
+| 100 | 1  | 10,267 | 75 | 10,192 | 0  | 0.007 | 1.000 |
+| 50  | 2  | 302    | 45 | 257    | 30 | 0.149 | 0.600 |
+| **25**  | **4**  | **1** | **1** | **0** | **74** | **1.000** | 0.013 |
+| 20  | 5  | 1      | 1  | 0      | 74 | 1.000 | 0.013 |
+| 10  | 10 | 0      | 0  | 0      | 75 | 0.000 | 0.000 |
 
-**Configuración óptima: b=25, r=4** — máxima precisión con recall razonable; punto más alejado del origen en la curva PR.
+**Trade-off observado:** `b=25` y `b=20` entregan precisión perfecta a cambio de recall mínimo; `b=50, r=2` es la mejor opción de balance neto en este experimento (60% recall con 15% precisión).
+
+**Spark MLlib MinHashLSH** (config: `numHashTables=100, threshold=0.80` ≡ Jaccard ≥ 0.20): retorna **5 candidatos con precisión 1.000 y recall 1.000** en 67 ms — estrictamente superior al banding manual gracias a su esquema OR de bandas optimizado.
+
+**LSH sobre catálogo completo** (`b=25, r=4` aplicado a las 8,362 películas): 2,826 pares candidatos en 0.0 s + validación Jaccard exacta en 2.0 s; 927 pares finales con `J ≥ 0.20`. Tiempo total **2.9 s** vs ~35 millones de comparaciones del all-pairs exacto.
 
 ### Reglas de asociación (Fase 4)
 
@@ -289,7 +294,7 @@ Sobre la muestra del 50 % (68,464 transacciones, 587 películas con ≥ 5,000 li
 | 1-itemsets frecuentes | 399 |
 | 2-itemsets frecuentes | 5,931 |
 | Reglas (`conf ≥ 0.5`, `lift > 1`) | **3,418** |
-| Tiempo total Apriori | ~30 s |
+| Tiempo total Apriori | 22.9 s |
 | RAM peak | ~2.5 GB |
 
 **Validación empírica del muestreo**: corrimos Apriori también con 100 % de usuarios (137K) y obtuvimos 3,415 reglas — el 50% captura el 99.9 % de las reglas del dataset completo, confirmando empíricamente la garantía Hoeffding.
@@ -312,10 +317,10 @@ Como complemento, ejecutamos `pyspark.ml.fpm.FPGrowth` sobre configuración más
 
 | Métrica | Valor |
 |---|---|
-| Itemsets frecuentes (todos los `k`) | 1,562 |
-| **Itemsets de tamaño ≥ 3** | **695** (hasta `k = 5`) |
+| Itemsets frecuentes (todos los `k`) | 1,550 |
+| **Itemsets de tamaño ≥ 3** | **690** (hasta `k = 5`) |
 | Reglas (`conf ≥ 0.5`, `lift > 1`) | 2,674 |
-| Tiempo total | ~0.5 s |
+| Tiempo total | 0.3 s |
 
 FP-Growth descubre patrones tipo `{LOTR1, LOTR2} → LOTR3` con confianza ≈ 0.90 que Apriori puro (limitado a `k = 2` por costo `O(|basket|^k)`) no encuentra.
 
@@ -325,15 +330,15 @@ Para aislar las diferencias algorítmicas de las diferencias de configuración, 
 
 | Métrica | Apriori puro | Spark FP-Growth |
 |---|---|---|
-| Tiempo | 1.84 s | **0.5 s** ⚡ |
-| Itemsets totales | 838 (`k = 1, 2`) | 1,562 (`k = 1..5`) |
-| Itemsets de `k ≥ 3` | 0 (limitado) | **695** |
-| Reglas | 611 | 2,674 |
+| Tiempo | 1.43 s | **0.26 s** ⚡ |
+| Itemsets totales | 838 (`k = 1, 2`) | 1,550 (`k = 1..5`) |
+| Itemsets de `k ≥ 3` | 0 (limitado) | **690** |
+| Reglas | 611 | 2,645 |
 | Tamaño máx itemset | 2 | **5** |
 
 **Conclusiones rigurosas:**
-1. **FP-Growth es ~3.7× más rápido** que Apriori puro sobre datos pre-filtrados de este tamaño — su FP-Tree evita las dos pasadas explícitas de Apriori; con datos chicos el overhead de Spark se amortiza con el algoritmo más inteligente.
-2. FP-Growth descubre **695 itemsets de tamaño ≥ 3** que Apriori (por nuestra decisión de limitarlo a `k = 2`) no encuentra; estos generan ~2,000 reglas adicionales con antecedente compuesto del tipo `{LOTR1, LOTR2} → LOTR3`.
+1. **FP-Growth es ~5.5× más rápido** que Apriori puro sobre datos pre-filtrados de este tamaño — su FP-Tree evita las dos pasadas explícitas de Apriori; con datos chicos el overhead de Spark se amortiza con el algoritmo más inteligente.
+2. FP-Growth descubre **690 itemsets de tamaño ≥ 3** que Apriori (por nuestra decisión de limitarlo a `k = 2`) no encuentra; estos generan ~2,000 reglas adicionales con antecedente compuesto del tipo `{LOTR1, LOTR2} → LOTR3`.
 3. La diferencia es **100 % atribuible al algoritmo**, no a los parámetros — los dos enfoques son complementarios.
 
 #### Análisis cross-genre vs intra-genre 
